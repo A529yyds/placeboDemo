@@ -107,7 +107,7 @@ int r2(int org, int con)
     return org / (con == 0 ? 1 : 2);
 }
 
-// 转化接口：转化数据格式、大小等操作
+// libplacebo转化接口：转化数据格式、大小等操作
 bool transferData(pl_renderer render, AVFrame *avframe)
 {
     bool ret = true;
@@ -198,6 +198,7 @@ bool transferData(pl_renderer render, AVFrame *avframe)
     return ret;
 }
 
+// ffmpeg读取本地文件解码等操作
 int readAvFrame(const char *filename, pl_renderer render)
 {
     avformat_network_init();
