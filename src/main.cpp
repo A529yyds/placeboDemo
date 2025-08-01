@@ -10,7 +10,8 @@
 
 #include <GL/glx.h>
 #include <GLFW/glfw3.h>
-
+// C++文件这个宏得定义为0
+// 对于#include <libplacebo/utils/libav.h>的引用需要放到c文件并且放到当前项目下
 #define PL_LIBAV_IMPLEMENTATION 0
 #include <libplacebo/gpu.h>
 #include <libplacebo/log.h>
@@ -29,21 +30,29 @@ extern "C"
 #include <libavfilter/avfilter.h>
 }
 
-// define global params
+// 定义一些全局变量
 #define WIDTH 3840
 #define HEIGHT 2160
 #define OUTWIDTH 4000
 #define OUTHEIGHT 2300
-#define OUTFILE "/root/lincy/placeboDemo/yuv422.yuv"
-// #define OUTFILE "/root/lincy/projects/placeboDemo/yuv_scaler.yuv"
-// #define VIDEOFILE "/root/lincy/projects/placeboDemo/yuv420p.mkv"
-#define VIDEOFILE "/root/lincy/placeboDemo/nv12.mkv"
+// 10.0.2.114下的目录
+// #define OUTFILE "/root/lincy/placeboDemo/yuv422.yuv"
+// #define VIDEOFILE "/root/lincy/placeboDemo/nv12.mkv"
+
+// 10.0.1.122目录【后续可以改为从执行程序中获取】
+// #define OUTFILE "/root/lincy/projects/placeboDemo/nv12.yuv"
+#define OUTFILE "/root/lincy/projects/placeboDemo/nv12.yuv"
+#define VIDEOFILE "/root/lincy/projects/placeboDemo/422p10le.mp4"
+
+// 定义一些宏，简化代码
 #define CERR(title, ctx) \
     std::cerr << "[" << title << "] " << ctx << std::endl;
 #define COUT(title, ctx, params) \
     std::cout << "[" << title << "] " << ctx << params << std::endl;
-#define EQ(a, b) .b = a.b,
-#define EQYUV(b) .b = pl_yuv.b,
+
+// 简化一些赋值操作，现在用不到
+// #define EQ(a, b) .b = a.b,
+// #define EQYUV(b) .b = pl_yuv.b,
 
 #define DEL(a)       \
     if (a)           \
@@ -51,17 +60,18 @@ extern "C"
         delete a;    \
         a = nullptr; \
     }
-
+// 输出文件
 std::ofstream _outfile(OUTFILE, std::ios::binary);
 // 线程安全的队列
 std::queue<pl_frame> _nvFrameQueue;
 std::mutex _mutex;
 std::condition_variable _cv;
+
 pl_gpu _gpu;
-pl_dispatch _dp;
+// 关闭文件标志位
 bool _bCLoseFile = false;
 bool _bLastData = false;
-
+// 下载纹理操作
 void downloadTex(pl_frame nvframe);
 // 主线程将 pl_frame 放入队列
 void pushFrameToQueue(pl_frame nv)
@@ -69,11 +79,11 @@ void pushFrameToQueue(pl_frame nv)
     {
         std::lock_guard<std::mutex> lock(_mutex); // 加锁
         _nvFrameQueue.push(nv);                   // 将 pl_frame 放入队列
-        // std::cout << "Main thread: Pushed frame " << nv.id << " to the queue." << std::endl;
     }
     _cv.notify_one();                                           // 通知子线程可以取数据了
     std::this_thread::sleep_for(std::chrono::milliseconds(50)); // 模拟延时
 }
+
 // 子线程从队列中取出 pl_frame 进行处理
 void processFramesFromQueue()
 {
@@ -90,49 +100,72 @@ void processFramesFromQueue()
         lock.unlock(); // 解锁，因为队列已经操作完了
     }
 }
-int r2(int org, int ctrl)
+
+// 除了con = 0时，其余都除2
+int r2(int org, int con)
 {
-    return org / (ctrl == 0 ? 1 : 2);
+    return org / (con == 0 ? 1 : 2);
 }
 
-bool yuv2nv(pl_renderer render, AVFrame *avframe)
+// 转化接口：转化数据格式、大小等操作
+bool transferData(pl_renderer render, AVFrame *avframe)
 {
     bool ret = true;
-    pl_frame pl_yuv = {.planes = {0}};
-    pl_frame_from_avframe(&pl_yuv, avframe);
-    pl_tex inTex[3] = {NULL, NULL, NULL};
-    if (!pl_map_avframe(_gpu, &pl_yuv, inTex, avframe))
+    pl_frame inFrame = {.planes = {0}};
+    // 从AVFrame格式转化为pl_frame格式，只能获取图像的信息，不能获取图像纹理
+    pl_frame_from_avframe(&inFrame, avframe);
+
+    pl_tex inTex[3] = {NULL, NULL, NULL}; // 输入纹理初始化
+    // 通过avframe的数据映射到pl_frame的纹理上，并将输入纹理上传gpu，理论上inTex可以为一个四维数组
+    if (!pl_map_avframe(_gpu, &inFrame, inTex, avframe))
     {
         COUT("ERROR", "pl_map_avframe ret is ", "false");
         return false;
     }
-    pl_tex outTex[4] = {NULL, NULL, NULL, NULL};
-    pl_frame target = {.planes = {0}};
-    bool bTestScaler = false;
+    pl_tex outTex[4] = {NULL, NULL, NULL, NULL}; // 输出纹理初始化
+    pl_frame outFrame = {.planes = {0}};
+    bool bTestScaler = false; // 测试放大模型标志位
     int outW = WIDTH;
     int outH = HEIGHT;
+    // 创建输出帧：此处仅需要对输出帧w/h/format进行设置即可
     AVFrame *out_frame = av_frame_alloc();
+    // 设置输出格式：
+    // 输出格式的值可以随便设置，只需要对后续写入文件的数据平面处理好即可
+    // 目前写入文件格式仅设置了YUV422P10LE、YUV420P、NV12
     out_frame->format = AV_PIX_FMT_YUV422P10LE;
     if (bTestScaler)
     {
+        // 放大倍数设为1.5倍
         outW = WIDTH * 1.5;
         outH = HEIGHT * 1.5;
         out_frame->format = AV_PIX_FMT_YUV420P;
     }
     out_frame->width = outW;
     out_frame->height = outH;
-    pl_frame_recreate_from_avframe(_gpu, &target, outTex, out_frame);
+    // 使用初始化后的out_frame[AVFrame]填充输出纹理和pl_frame
+    pl_frame_recreate_from_avframe(_gpu, &outFrame, outTex, out_frame);
+    // 设置渲染参数:此处采用默认参数
     pl_render_params params = pl_render_default_params;
-    params.upscaler = &pl_filter_bicubic;
-    if (!pl_render_image(render, &pl_yuv, &target, &params))
+    // 放大算法
+    // params.upscaler = &pl_filter_bicubic;
+    // params.upscaler = &pl_filter_nearest;
+
+    // 图像渲染
+    if (!pl_render_image(render, &inFrame, &outFrame, &params))
     {
         COUT("ERROR", "pl_render_image ret is ", "false");
     }
     else
     {
+        // 初始化AVFrame的data数据[不初始化无法下载纹理]
         av_frame_get_buffer(out_frame, 32);
-        if (pl_download_avframe(_gpu, &target, out_frame))
+        // 从gpu下载纹理并填充到输出帧
+        if (pl_download_avframe(_gpu, &outFrame, out_frame))
         {
+            // 获取输出帧数据并写入文件，根据图像格式将不同平面数据以及数据大小分别写入文件
+            // YUV420P:Y[w * h], U[w / 2 * h / 2], V[w / 2 * h / 2]
+            // YUV422P10LE:Y[w * h * 2], U[w * (h / 2) * 2], V[w * (h / 2) * 2]
+            // NV12:Y[w * h], UV[(w / 2 * h / 2) * 2]
             if (out_frame->format == AV_PIX_FMT_YUV420P)
             {
                 _outfile.write(reinterpret_cast<const char *>(out_frame->data[0]), outW * outH);
@@ -151,8 +184,10 @@ bool yuv2nv(pl_renderer render, AVFrame *avframe)
                 _outfile.write(reinterpret_cast<const char *>(out_frame->data[1]), outW * outH / 2);
             }
         }
+        // 释放out_frame的资源
         av_frame_free(&out_frame);
     }
+    // 释放纹理资源
     pl_tex_destroy(_gpu, &inTex[0]);
     pl_tex_destroy(_gpu, &inTex[1]);
     pl_tex_destroy(_gpu, &inTex[2]);
@@ -163,80 +198,157 @@ bool yuv2nv(pl_renderer render, AVFrame *avframe)
     return ret;
 }
 
-bool yuv2nvTest(pl_renderer render, AVFrame *avframe)
+int readAvFrame(const char *filename, pl_renderer render)
 {
-    bool ret = true;
-    pl_frame pl_yuv = {.planes = {0}};
-    pl_frame_from_avframe(&pl_yuv, avframe);
-    pl_tex inTex[3] = {NULL, NULL, NULL};
-    if (!pl_map_avframe(_gpu, &pl_yuv, inTex, avframe))
+    avformat_network_init();
+    AVFormatContext *fmtCtx = nullptr;
+    if (avformat_open_input(&fmtCtx, filename, nullptr, nullptr) < 0)
     {
-        COUT("ERROR", "pl_map_avframe ret is ", "false");
-        return false;
+        std::cout << "avformat_open_input failed!\n";
+        return -1;
     }
-    pl_plane planes[2];
-    pl_tex outTex[2] = {NULL, NULL};
-    uint8_t *data[2] = {NULL, NULL};
-    // for (int i = 0; i < 2; i++)
-    // {
-    //     int w = avframe->width;
-    //     int h = r2(avframe->height, i);
-    //     data[i] = new uint8_t(w * h);
-    //     pl_plane_data planeData = {
-    //         .type = PL_FMT_UNORM,
-    //         .width = w,
-    //         .height = h,
-    //         .component_size = {8 * sizeof(uint8_t)},
-    //         .component_pad = 0,
-    //         .component_map = {i},
-    //         .pixel_stride = sizeof(uint8_t),
-    //         .row_stride = w,
-    //         .pixels = data[i], // avframe->data[i],
-    //     };
-
-    //     if (!pl_recreate_plane(_gpu, NULL, &outTex[i], &planeData))
-    //         return false;
-    //     planes[i] = pl_yuv.planes[i];
-    //     planes[i].texture = outTex[i];
-    // }
-    pl_frame target = {
-        .num_planes = 2,
-        .planes = {
-            // planes[0],
-            // planes[1],
-        },
-        EQYUV(repr) EQYUV(color) EQYUV(icc)};
-
-    AVFrame *out_frame = av_frame_alloc();
-    out_frame->format = AV_PIX_FMT_NV12;
-    out_frame->width = avframe->width;
-    out_frame->height = avframe->height;
-    pl_frame_recreate_from_avframe(_gpu, &target, outTex, out_frame);
-    pl_render_params params = pl_render_default_params;
-    params.upscaler = &pl_filter_bicubic;
-    ret = pl_render_image(render, &pl_yuv, &target, &params);
-    if (!ret)
+    if (avformat_find_stream_info(fmtCtx, nullptr) < 0)
     {
-        COUT("ERROR", "pl_render_image ret is ", ret);
+        std::cout << "avformat_find_stream_info failed!\n";
+        return -1;
     }
-    else
+
+    int videoStreamIndex = -1;
+    for (unsigned i = 0; i < fmtCtx->nb_streams; ++i)
     {
-        av_frame_get_buffer(out_frame, 32);
-        if (pl_download_avframe(_gpu, &target, out_frame))
+        if (fmtCtx->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_VIDEO)
         {
-            _outfile.write(reinterpret_cast<const char *>(out_frame->data[0]), 3840 * 2160);
-            _outfile.write(reinterpret_cast<const char *>(out_frame->data[1]), 1920 * 1080 * 2);
+            videoStreamIndex = i;
+            break;
         }
-        av_frame_free(&out_frame);
     }
-    pl_tex_destroy(_gpu, &inTex[0]);
-    pl_tex_destroy(_gpu, &inTex[1]);
-    pl_tex_destroy(_gpu, &inTex[2]);
-    pl_tex_destroy(_gpu, &outTex[0]);
-    pl_tex_destroy(_gpu, &outTex[1]);
-    DEL(data[0]);
-    DEL(data[1]);
-    return ret;
+    if (videoStreamIndex < 0)
+    {
+        std::cout << "videoStreamIndex < 0\n";
+        return -1;
+    }
+    AVCodecParameters *codecpar = fmtCtx->streams[videoStreamIndex]->codecpar;
+    const AVCodec *decoder = avcodec_find_decoder(codecpar->codec_id);
+    if (!decoder)
+    {
+        std::cout << "vavcodec_find_decoder failed\n";
+        avformat_close_input(&fmtCtx);
+        return -1;
+    }
+    AVCodecContext *codecCtx = avcodec_alloc_context3(decoder);
+    if (!codecCtx)
+    {
+        std::cout << "avcodec_alloc_context3 failed\n";
+        avcodec_free_context(&codecCtx);
+        avformat_close_input(&fmtCtx);
+        return -1;
+    }
+    if (avcodec_parameters_to_context(codecCtx, codecpar) < 0)
+    {
+        std::cout << "avcodec_parameters_to_context failed\n";
+        avcodec_free_context(&codecCtx);
+        avformat_close_input(&fmtCtx);
+        return -1;
+    }
+    if (avcodec_open2(codecCtx, decoder, nullptr) < 0)
+    {
+        std::cout << "avcodec_open2 failed\n";
+        avcodec_free_context(&codecCtx);
+        avformat_close_input(&fmtCtx);
+        return -1;
+    }
+
+    AVPacket *pkt = av_packet_alloc();
+    AVFrame *frame = av_frame_alloc();
+    bool stopFlag = false;
+    while (av_read_frame(fmtCtx, pkt) >= 0)
+    {
+        if (pkt->stream_index == videoStreamIndex)
+        {
+            if (avcodec_send_packet(codecCtx, pkt) == 0)
+            {
+                while (avcodec_receive_frame(codecCtx, frame) == 0)
+                {
+                    if (!transferData(render, frame))
+                    {
+                        stopFlag = true;
+                        break;
+                    }
+                }
+                if (stopFlag)
+                    break;
+            }
+        }
+    }
+    _bCLoseFile = true;
+    _outfile.close();
+    av_frame_free(&frame);
+    av_packet_free(&pkt);
+    avcodec_free_context(&codecCtx);
+    avformat_close_input(&fmtCtx);
+}
+
+// 一些其他方法的代码
+// 使用pl_upload_plane和pl_tex_download回调实现【该方法输出纹理配置有问题导致输出图像格式不对】
+
+struct callData
+{
+    uint8_t *data;
+    int size;
+};
+
+callData calldata[3] = {{
+                            .data = new uint8_t[3840 * 2160],
+                            .size = 0,
+                        },
+                        {
+                            .data = new uint8_t[1920 * 1080],
+                            .size = 0,
+                        },
+                        {
+                            .data = new uint8_t[1920 * 1080],
+                            .size = 0,
+                        }};
+
+// pl_tex_download回调函数
+void callback(void *priv)
+{
+    callData *data = (callData *)priv;
+    _outfile.write(reinterpret_cast<const char *>(data->data), data->size);
+    COUT("CALLBACK", "datasize is ", data->size);
+}
+
+void downloadTex(pl_frame target)
+{
+    pl_tex_transfer_params tsParams[3] = {{}, {}, {}};
+    for (int i = 0; i < target.num_planes; i++)
+    {
+        pl_tex tex = target.planes[i].texture;
+        int w = tex->params.w;
+        int h = tex->params.h;
+        int bufSize = w * h;
+        calldata[i].size = bufSize;
+        tsParams[i] = {
+            .tex = tex,
+            .row_pitch = w * tex->params.format->texel_size,
+            .depth_pitch = 3,
+            .callback = callback,
+            .priv = (void *)&calldata[i],
+            .ptr = calldata[i].data,
+        };
+        COUT("tsParams", "i = ", i);
+        COUT("tsParams", "w = ", w);
+        COUT("tsParams", "h = ", h);
+        if (tex)
+            COUT("tsParams", "texture = ", tex);
+        if (calldata[i].data)
+            COUT("tsParams", "calldata[i].data = ", &calldata[i].data);
+        COUT("tsParams", "i = ", i);
+        if (!pl_tex_download(_gpu, &tsParams[i]))
+        {
+            COUT("ERROR", "纹理下载失败！i = ", i);
+        }
+    }
 }
 
 bool yuv2nv1(pl_renderer render, AVFrame *avframe)
@@ -329,64 +441,6 @@ bool yuv2nv1(pl_renderer render, AVFrame *avframe)
     _outfile.close();
     return ret;
 }
-struct callData
-{
-    uint8_t *data;
-    int size;
-};
-
-callData calldata[3] = {{
-                            .data = new uint8_t[3840 * 2160],
-                            .size = 0,
-                        },
-                        {
-                            .data = new uint8_t[1920 * 1080],
-                            .size = 0,
-                        },
-                        {
-                            .data = new uint8_t[1920 * 1080],
-                            .size = 0,
-                        }};
-
-void callback(void *priv)
-{
-    callData *data = (callData *)priv;
-    _outfile.write(reinterpret_cast<const char *>(data->data), data->size);
-    COUT("CALLBACK", "datasize is ", data->size);
-}
-
-void downloadTex(pl_frame target)
-{
-    pl_tex_transfer_params tsParams[3] = {{}, {}, {}};
-    for (int i = 0; i < target.num_planes; i++)
-    {
-        pl_tex tex = target.planes[i].texture;
-        int w = tex->params.w;
-        int h = tex->params.h;
-        int bufSize = w * h;
-        calldata[i].size = bufSize;
-        tsParams[i] = {
-            .tex = tex,
-            .row_pitch = w * tex->params.format->texel_size,
-            .depth_pitch = 3,
-            .callback = callback,
-            .priv = (void *)&calldata[i],
-            .ptr = calldata[i].data,
-        };
-        COUT("tsParams", "i = ", i);
-        COUT("tsParams", "w = ", w);
-        COUT("tsParams", "h = ", h);
-        if (tex)
-            COUT("tsParams", "texture = ", tex);
-        if (calldata[i].data)
-            COUT("tsParams", "calldata[i].data = ", &calldata[i].data);
-        COUT("tsParams", "i = ", i);
-        if (!pl_tex_download(_gpu, &tsParams[i]))
-        {
-            COUT("ERROR", "纹理下载失败！i = ", i);
-        }
-    }
-}
 
 void downloadTex1(pl_tex outtex[2])
 {
@@ -420,6 +474,7 @@ void downloadTex1(pl_tex outtex[2])
     }
     flag = false;
 }
+// 循环pl_tex_download【不影响结果】
 void downloadTex2(pl_frame nvframe)
 {
     static bool flag = true;
@@ -470,96 +525,6 @@ void downloadTex2(pl_frame nvframe)
         }
     }
     flag = false;
-}
-
-int readAvFrame(const char *filename, pl_renderer render)
-{
-    avformat_network_init();
-    AVFormatContext *fmtCtx = nullptr;
-    if (avformat_open_input(&fmtCtx, filename, nullptr, nullptr) < 0)
-    {
-        std::cout << "avformat_open_input failed!\n";
-        return -1;
-    }
-    if (avformat_find_stream_info(fmtCtx, nullptr) < 0)
-    {
-        std::cout << "avformat_find_stream_info failed!\n";
-        return -1;
-    }
-
-    int videoStreamIndex = -1;
-    for (unsigned i = 0; i < fmtCtx->nb_streams; ++i)
-    {
-        if (fmtCtx->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_VIDEO)
-        {
-            videoStreamIndex = i;
-            break;
-        }
-    }
-    if (videoStreamIndex < 0)
-    {
-        std::cout << "videoStreamIndex < 0\n";
-        return -1;
-    }
-    AVCodecParameters *codecpar = fmtCtx->streams[videoStreamIndex]->codecpar;
-    const AVCodec *decoder = avcodec_find_decoder(codecpar->codec_id);
-    if (!decoder)
-    {
-        std::cout << "vavcodec_find_decoder failed\n";
-        avformat_close_input(&fmtCtx);
-        return -1;
-    }
-    AVCodecContext *codecCtx = avcodec_alloc_context3(decoder);
-    if (!codecCtx)
-    {
-        std::cout << "avcodec_alloc_context3 failed\n";
-        avcodec_free_context(&codecCtx);
-        avformat_close_input(&fmtCtx);
-        return -1;
-    }
-    if (avcodec_parameters_to_context(codecCtx, codecpar) < 0)
-    {
-        std::cout << "avcodec_parameters_to_context failed\n";
-        avcodec_free_context(&codecCtx);
-        avformat_close_input(&fmtCtx);
-        return -1;
-    }
-    if (avcodec_open2(codecCtx, decoder, nullptr) < 0)
-    {
-        std::cout << "avcodec_open2 failed\n";
-        avcodec_free_context(&codecCtx);
-        avformat_close_input(&fmtCtx);
-        return -1;
-    }
-
-    AVPacket *pkt = av_packet_alloc();
-    AVFrame *frame = av_frame_alloc();
-    bool stopFlag = false;
-    while (av_read_frame(fmtCtx, pkt) >= 0)
-    {
-        if (pkt->stream_index == videoStreamIndex)
-        {
-            if (avcodec_send_packet(codecCtx, pkt) == 0)
-            {
-                while (avcodec_receive_frame(codecCtx, frame) == 0)
-                {
-                    if (!yuv2nv(render, frame))
-                    {
-                        stopFlag = true;
-                        break;
-                    }
-                }
-                if (stopFlag)
-                    break;
-            }
-        }
-    }
-    _bCLoseFile = true;
-    _outfile.close();
-    av_frame_free(&frame);
-    av_packet_free(&pkt);
-    avcodec_free_context(&codecCtx);
-    avformat_close_input(&fmtCtx);
 }
 
 // OpenGL函数加载器
@@ -689,6 +654,7 @@ void cleanup_gl_params(struct pl_opengl_params *params)
     }
 }
 
+// 放大操作【后发现内部有直接实现的参数接口】
 void upscale(pl_renderer rr, pl_tex fbo, pl_frame image)
 {
     // struct pl_frame target = {
@@ -732,7 +698,6 @@ int main()
     // 创建GPU实例
     pl_opengl gl = pl_opengl_create(log, &params);
     _gpu = gl->gpu;
-    _dp = pl_dispatch_create(log, _gpu);
     if (!_gpu)
     {
         fprintf(stderr, "Failed creating OpenGL GPU!\n");
@@ -740,12 +705,13 @@ int main()
     }
     pl_renderer rder = pl_renderer_create(log, _gpu);
 
+    // 使用线程的方法
     // std::thread workerThread(processFramesFromQueue);
     // _queue = pl_queue_create(gpu);
-    readAvFrame(VIDEOFILE, rder);
     // workerThread.join();
 
-    std::cout << VIDEOFILE << " file find end ... \n";
+    readAvFrame(VIDEOFILE, rder);
+    COUT("FILE_PROC", "process end, the out file name is ", VIDEOFILE);
     // 清理
     pl_renderer_destroy(&rder);
     pl_gpu_flush(_gpu);
