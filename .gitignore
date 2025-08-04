@@ -3,3 +3,5 @@ build
 *.mkv
 *.yuv
 ffbuild
+VideoFiles
+.vscode
