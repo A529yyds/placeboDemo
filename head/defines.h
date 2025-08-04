@@ -1,0 +1,14 @@
+// 定义一些通用的枚举、宏、结构体等
+#pragma once
+
+#include <iostream>
+#define WIDTH 3840
+#define HEIGHT 2160
+#define VIDEOFILE "/root/lincy/placeboDemo/VideoFiles/in/yuv420p.mkv"
+#define OUTFILE "/root/lincy/placeboDemo/VideoFiles/out/nv12.yuv"
+// #define OUTFILE "/root/lincy/projects/placeboDemo/yuv_scaler.yuv"
+// #define VIDEOFILE "/root/lincy/projects/placeboDemo/yuv420p.mkv"
+#define CERR(title, ctx) \
+    std::cerr << "[" << title << "] " << ctx << std::endl;
+#define COUT(title, ctx, params) \
+    std::cout << "[" << title << "] " << ctx << params << std::endl;
