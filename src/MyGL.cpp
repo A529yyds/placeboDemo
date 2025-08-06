@@ -42,6 +42,7 @@ MyGL::~MyGL()
     pl_log_destroy(&_log);
     eglDestroyContext(_display, _context);
     eglTerminate(_display);
+    DELETE(_instance);
 }
 
 EGLDisplay MyGL::GetSurfacelessDisplay()

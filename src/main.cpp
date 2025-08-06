@@ -87,7 +87,7 @@ int main(int argc, char *argv[])
             {
                 while (avcodec_receive_frame(_codecCtx, frame) == 0)
                 {
-                    if (!opt->optPb(frame, PB_OPT_TRANSFER_FMT))
+                    if (!opt->optPb(frame, PB_OPT_COLOR_SPACE))
                     {
                         stopFlag = true;
                         break;
@@ -102,10 +102,6 @@ int main(int argc, char *argv[])
     av_packet_free(&pkt);
     avcodec_free_context(&_codecCtx);
     avformat_close_input(&_fmtCtx);
-    if (opt)
-    {
-        delete opt;
-        opt = nullptr;
-    }
+    DELETE(opt);
     return 0;
 }
