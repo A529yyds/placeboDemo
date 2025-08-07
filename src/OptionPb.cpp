@@ -135,7 +135,7 @@ void OptionPb::options(MY_OPTION_PB opt, pl_render_params &params)
     CONDITION(PB_OPT_ANTIRING, opt1Params(PB_OPT_ANTIRING, params, 1));
     CONDITION(PB_OPT_SIGMOID, opt1Params(PB_OPT_SIGMOID, params, 1));
     CONDITION(PB_OPT_DEINTERLACE, deinterlace(PL_DEINTERLACE_BOB, true, params));
-    float dVal[5] = {1, 1, 4, 16, 6};
+    float dVal[5] = {1, 1, 4, 16, 1024};
     CONDITION(PB_OPT_DEBAND, deband(params, dVal));
     float val[6] = {0.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f};
     CONDITION(PB_OPT_COLOR_ADJ, colorAdj(params, val));
@@ -147,7 +147,7 @@ void OptionPb::options(MY_OPTION_PB opt, pl_render_params &params)
     CONDITION(PB_OPT_ANTIRING, dither(params, idVal));
     float cVal[2] = {0, 0};
     CONDITION(PB_OPT_ANTIRING, cone(params, cVal));
-    CONDITION(PB_OPT_ANTIRING, opt1Params(PB_OPT_ANTIRING, params, 1));
+    CONDITION(PB_OPT_ANTIRING, opt1Params(PB_OPT_ANTIRING, params, 0.5));
     CONDITION(PB_OPT_SIGMOID, opt1Params(PB_OPT_SIGMOID, params, 1));
     CONDITION(PB_OPT_SKIPAA, opt1Params(PB_OPT_SKIPAA, params, true));
     CONDITION(PB_OPT_DISABLE_LINEAR, opt1Params(PB_OPT_DISABLE_LINEAR, params, true));

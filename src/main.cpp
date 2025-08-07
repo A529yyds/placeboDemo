@@ -87,7 +87,7 @@ int main(int argc, char *argv[])
             {
                 while (avcodec_receive_frame(_codecCtx, frame) == 0)
                 {
-                    if (!opt->optPb(frame, PB_OPT_COLOR_SPACE))
+                    if (!opt->optPb(frame, PB_OPT_DEBAND))
                     {
                         stopFlag = true;
                         break;
