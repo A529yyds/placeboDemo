@@ -5,3 +5,5 @@ build
 ffbuild
 VideoFiles
 .vscode
+*.jpg
+*.png

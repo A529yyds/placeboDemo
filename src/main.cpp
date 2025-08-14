@@ -8,6 +8,8 @@
 
 #include "defines.h"
 #include "OptionPb.h"
+#include <chrono>
+#include <thread>
 
 AVFormatContext *_fmtCtx = nullptr;
 AVCodecContext *_codecCtx = nullptr;
@@ -71,14 +73,13 @@ int InitFFmpeg(const char *filename)
     }
 }
 
-int main(int argc, char *argv[])
+void codecTask(OptionPb *opt)
 {
-    OptionPb *opt = new OptionPb();
-    InitFFmpeg(VIDEOFILE);
-
     AVPacket *pkt = av_packet_alloc();
     AVFrame *frame = av_frame_alloc();
     bool stopFlag = false;
+    AVFrameWrap wFrame;
+    wFrame.frame = av_frame_alloc();
     while (av_read_frame(_fmtCtx, pkt) >= 0)
     {
         if (pkt->stream_index == _videoStreamIndex)
@@ -87,21 +88,71 @@ int main(int argc, char *argv[])
             {
                 while (avcodec_receive_frame(_codecCtx, frame) == 0)
                 {
-                    if (!opt->optPb(frame, PB_OPT_DEBAND))
-                    {
-                        stopFlag = true;
-                        break;
-                    }
+                    frame->pts = pkt->pts;
+                    wFrame.frame = frame;
+                    opt->pushAVframe(wFrame);
+                    // if (opt->optPb(frame))
+                    // {
+                    //     stopFlag = true;
+                    //     break;
+                    // }
                 }
-                if (stopFlag)
-                    break;
+                // if (stopFlag)
+                //     break;
             }
         }
+        av_packet_unref(pkt);
     }
-    av_frame_free(&frame);
+    // av_frame_free(&frame);
+    // frame = nullptr;
     av_packet_free(&pkt);
+    // wFrame.unref();
+    opt->stopTask();
+}
+
+void placenoOptTask(OptionPb *opt)
+{
+    // bool bret = opt->handleOpt(PB_OPT_DOWNSCARLER);
+    auto start = std::chrono::steady_clock::now();
+    opt->handleOpt(PB_OPT_DOWNSCARLER);
+    auto end = std::chrono::steady_clock::now();
+    auto duration = std::chrono::duration_cast<std::chrono::seconds>(end - start);
+    // 将时间差转换为 uint32_t
+    uint32_t time_diff_ms = static_cast<uint32_t>(duration.count());
+    // 输出时间差
+    std::cout << "Time difference: " << time_diff_ms << " seconds" << std::endl;
     avcodec_free_context(&_codecCtx);
     avformat_close_input(&_fmtCtx);
     DELETE(opt);
+}
+
+int main(int argc, char *argv[])
+{
+    OptionPb *opt = new OptionPb();
+    InitFFmpeg(VIDEOFILE);
+
+    // auto start = std::chrono::steady_clock::now();
+    // std::thread workerThread(codecTask, opt);
+    std::thread workerThread1(codecTask, opt);
+    // workerThread.join();
+    // codecTask(opt);
+    placenoOptTask(opt);
+    workerThread1.join();
+
+    // if (opt->bEndTask())
+    // {
+    // }
+    // //
+    // avcodec_free_context(&_codecCtx);
+    // avformat_close_input(&_fmtCtx);
+    // DELETE(opt);
+    // auto start = std::chrono::steady_clock::now();
+    // auto end = std::chrono::steady_clock::now();
+    // auto duration = std::chrono::duration_cast<std::chrono::seconds>(end - start);
+    // // 将时间差转换为 uint32_t
+    // uint32_t time_diff_ms = static_cast<uint32_t>(duration.count());
+    // // 输出时间差
+    // std::cout << "Time difference: " << time_diff_ms << " seconds" << std::endl;
+
     return 0;
 }

@@ -1,6 +1,7 @@
 #include "OptionPb.h"
 #include "defines.h"
-
+// 此处直接引用libav.h会报错：C++不能启用PL_LIBAV_IMPLEMENTATION宏
+// 解决方法：新增.c文件，将启用宏和引用头文件放到c文件里，详见test.c
 #define PL_LIBAV_IMPLEMENTATION 0
 #include <libplacebo/gpu.h>
 #include <libplacebo/utils/libav.h>
@@ -19,25 +20,71 @@ OptionPb::OptionPb()
     _outAvFrame = av_frame_alloc();
 }
 
-void OptionPb::endOpt()
+void OptionPb::pushAVframe(AVFrameWrap &frame)
 {
-    // 释放out_frame的资源
-    av_frame_free(&_outAvFrame);
-    _outfile.close();
+    AVFrameWrap frame2;
+    frame2.frame = av_frame_alloc();
+    frame2 = frame;
+    _queueFrame.push(std::move(frame2));
+    // frame2.unref();
+    // {
+    //     std::lock_guard<std::mutex> lock(_mutex); // 加锁
+    //     bool isEmpty = _myAVFrames.empty();
+    //     _myAVFrames.push(frame);
+    // }
 }
 
+bool OptionPb::handleOpt(MY_OPTION_PB opt)
+{
+    AVFrameWrap wFrame;
+    bool ret = true;
+    // wFrame.frame = av_frame_alloc();
+    while (!_bStop)
+    {
+        // {
+        //     std::lock_guard<std::mutex> lock(_mutex); // 加锁
+        //     if (!_myAVFrames.empty())
+        //     {
+        //         AVFrame *tmpFrame = _myAVFrames.front();
+        //         // _myAVFrames.front(); // 获取队首元素（不删除）:ml-citation{ref="6,14" data="citationList"}
+        //         optPb(tmpFrame, opt);
+        //         _myAVFrames.pop();
+        //     }
+        // }
+        // if (ret = _queueFrame.try_pop(wFrame))
+        // {
+        //     ret = optPb(wFrame.frame, opt);
+        // }
+        if (ret = _queueFrame.try_pop(wFrame))
+        {
+            ret = optPb(wFrame.frame, opt);
+        }
+    }
+    // wFrame.unref();
+    _outfile.close();
+    return ret;
+}
+
+void OptionPb::stopTask()
+{
+    std::lock_guard<std::mutex> lock(_mutex); // 加锁
+    {
+        _bStop = true;
+    }
+}
+int count = 0;
 bool OptionPb::optPb(AVFrame *inAvFrame, MY_OPTION_PB opt)
 {
     bool ret = true;
     pl_frame inFrame = {.planes = {0}};
 
-    CONDITION(PB_OPT_CROP, crop(inAvFrame));
+    // CONDITION(PB_OPT_CROP, crop(inAvFrame));
     // 从AVFrame格式转化为pl_frame格式，只能获取图像的信息，不能获取图像纹理
     pl_frame_from_avframe(&inFrame, inAvFrame);
 
     pl_tex inTex[4] = {NULL, NULL, NULL, NULL}; // 输入纹理初始化
     // 通过avframe的数据映射到pl_frame的纹理上，并将输入纹理上传gpu，理论上inTex可以为一个四维数组
-    if (!pl_map_avframe(_gpu, &inFrame, inTex, inAvFrame))
+    if (!pl_map_avframe(_gpu, &inFrame, inTex, inAvFrame)) // 不能放到子线程中运行
     {
         COUT("ERROR", "pl_map_avframe ret is ", "false");
         return false;
@@ -45,8 +92,8 @@ bool OptionPb::optPb(AVFrame *inAvFrame, MY_OPTION_PB opt)
     pl_tex outTex[4] = {NULL, NULL, NULL, NULL}; // 输出纹理初始化
     pl_frame outFrame = {.planes = {0}};
     // 创建输出帧：此处仅需要对输出帧w/h/format进行设置即可
-    _outAvFrame->width = WIDTH;
-    _outAvFrame->height = HEIGHT;
+    _outAvFrame->width = WIDTH * 0.5;
+    _outAvFrame->height = HEIGHT * 0.5;
     _outAvFrame->format = inAvFrame->format;
     // 设置输出格式：
     // 输出格式的值可以随便设置，只需要对后续写入文件的数据平面处理好即可
@@ -57,9 +104,10 @@ bool OptionPb::optPb(AVFrame *inAvFrame, MY_OPTION_PB opt)
     ret = pl_frame_recreate_from_avframe(_gpu, &outFrame, outTex, _outAvFrame);
     // 设置渲染参数: 此处采用默认参数
     pl_render_params params = pl_render_default_params;
-    options(opt, params);
+    // options(opt, params);
     // CONDITION(PB_OPT_SAR_NORMALIZE, SarNormalize(inFrame, outFrame, params, true, 0));
 
+    auto start = std::chrono::steady_clock::now();
     if (!(ret = pl_render_image(_render, &inFrame, &outFrame, &params)))
     {
         COUT("ERROR", "pl_render_image ret is ", "false");
@@ -72,12 +120,28 @@ bool OptionPb::optPb(AVFrame *inAvFrame, MY_OPTION_PB opt)
             writeFiles(_outAvFrame);
         }
     }
+    auto end = std::chrono::steady_clock::now();
+    auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
+    // 将时间差转换为 uint32_t
+    uint32_t time_diff_ms = static_cast<uint32_t>(duration.count());
+    // 输出时间差
+    if (time_diff_ms > 0)
+        std::cout
+            << "frame " << count << ", pl_render_image time: " << time_diff_ms << " microseconds" << std::endl;
+    if (time_diff_ms > 2000)
+        count = 0;
+    count++;
     // 释放纹理资源
     for (int i = 0; i < 4; i++)
     {
         pl_tex_destroy(_gpu, &inTex[i]);
         pl_tex_destroy(_gpu, &outTex[i]);
     }
+
+    pl_unmap_avframe(_gpu, &inFrame);
+    pl_unmap_avframe(_gpu, &outFrame);
+    av_frame_unref(inAvFrame); // 根据所有权决定
+    av_frame_unref(_outAvFrame);
     return ret;
 }
 
@@ -443,4 +507,68 @@ void OptionPb::opt1Params(MY_OPTION_PB opt, pl_render_params &params, T val)
     // 完全禁用使用 FBO（帧缓冲对象），相当于假设没有可渲染的纹理格式。
     // 这将禁用大多数使用帧缓冲对象的功能，并且通常会减少性能，特别是在需要渲染到离屏缓冲的场景中
     CONDITION(PB_OPT_DISABLE_FBOS, params.disable_fbos = val);
+}
+
+inline void AVFrameWrap::unref()
+{
+    if (frame != nullptr)
+    {
+        av_frame_unref(frame);
+    }
+}
+
+AVFrameWrap::AVFrameWrap(AVFrameWrap &&temp)
+{
+    operator=(std::move(temp));
+}
+
+AVFrameWrap::AVFrameWrap(AVFrameWrap &temp)
+{
+    operator=(temp);
+}
+
+AVFrameWrap::~AVFrameWrap()
+{
+    if (frame != nullptr)
+    {
+        av_frame_free(&frame);
+        frame = nullptr;
+    }
+}
+
+inline void AVFrameWrap::operator=(AVFrameWrap &temp)
+{
+    if (temp.frame == nullptr)
+    {
+        return;
+    }
+
+    if (frame != nullptr)
+    {
+        unref();
+        av_frame_ref(frame, temp.frame);
+    }
+    else
+    {
+        frame = av_frame_clone(temp.frame);
+    }
+}
+
+inline void AVFrameWrap::operator=(AVFrameWrap &&temp)
+{
+    if (temp.frame == nullptr)
+    {
+        return;
+    }
+
+    if (frame != nullptr)
+    {
+        unref();
+        av_frame_move_ref(frame, temp.frame);
+    }
+    else
+    {
+        frame = av_frame_alloc();
+        av_frame_move_ref(frame, temp.frame);
+    }
 }

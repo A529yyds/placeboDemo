@@ -61,6 +61,12 @@ EGLDisplay MyGL::GetSurfacelessDisplay()
 
 bool MyGL::initGLValue()
 {
+    // step0
+    if (!eglBindAPI(EGL_OPENGL_API))
+    {
+        CERR("ERROR", "Failed to bind API");
+        return false;
+    }
     // Step 1: Get display
     _display = GetSurfacelessDisplay();
     if (_display == EGL_NO_DISPLAY)
@@ -78,7 +84,7 @@ bool MyGL::initGLValue()
 
     // Step 3: Choose config
     EGLint config_attrs[] = {
-        EGL_RENDERABLE_TYPE, EGL_OPENGL_ES3_BIT,
+        EGL_RENDERABLE_TYPE, EGL_OPENGL_BIT,
         EGL_SURFACE_TYPE, EGL_PBUFFER_BIT,
         EGL_NONE};
     EGLConfig config;
